@@ -1,0 +1,21 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets & config locale
+.env
+
+# Données locales (jamais versionnées)
+data/
+*.duckdb
+*.duckdb.wal
+
+# dbt / Airflow (artefacts)
+dbt/target/
+dbt/logs/
+logs/
+
+# OS / éditeur
+.DS_Store
+.vscode/
