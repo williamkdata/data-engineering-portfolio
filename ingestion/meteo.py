@@ -14,14 +14,30 @@ OPENMETEO_DISCOVERY_URL = "https://api.open-meteo.com/v1/forecast?latitude=48.85
 DB_PATH = "data/velib.duckdb"
 DATASET_NAME = "meteo_raw"
 
+def parse_hourly_weather_data(payload: dict) -> list[dict]:
+    """Parse the hourly weather data from the Open-Meteo API response."""
+    data = payload["hourly"]
+    return [
+        {
+            "time": time_weather,
+            "temperature_2m": temperature,
+            "windspeed_10m": windspeed,
+            "precipitation": precipitation
+        }
+        for time_weather, temperature, windspeed, precipitation in zip(
+            data["time"], data["temperature_2m"], data["windspeed_10m"], data["precipitation"]
+        )
+    ]
+
 @dlt.resource(name="weather", write_disposition="append")
 def get_weather():
     """Récupère la météo actuelle à Paris (pour enrichir le statut des stations)."""
     url = OPENMETEO_DISCOVERY_URL
     payload = fetch_json(url)
-    data = payload["hourly"]
     ingested_at = datetime.now(timezone.utc).isoformat()
-    resultat = [{"time" : time_weather, "temperature_2m": temperature, "windspeed_10m": windspeed, "precipitation": precipitation, "ingested_at": ingested_at} for time_weather, temperature, windspeed, precipitation in zip(data["time"], data["temperature_2m"], data["windspeed_10m"], data["precipitation"])]
+    resultat = parse_hourly_weather_data(payload)
+    for record in resultat:
+        record["ingested_at"] = ingested_at
     yield resultat
 
 def print_control_query() -> None:

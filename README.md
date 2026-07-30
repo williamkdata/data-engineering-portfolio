@@ -38,3 +38,20 @@ uv run python ingestion/meteo.py
 - **Transformation des tableaux parallèles.** L'API Open-Meteo renvoie ses variables horaires en tableaux parallèles (`hourly.time`, `hourly.temperature_2m`, ...), pas en liste d'objets — reconstruits en une liste de dicts (une ligne par heure) via `zip()`.
 
 **Limite connue et mesurée (couverture temporelle avec `station_status`)** : l'appel Open-Meteo ne demande aucun `past_days` — la fenêtre météo est une fenêtre **glissante** (aujourd'hui + 7 jours), alors que l'historique Vélib' s'accumule et vieillit. Une jointure par existence de correspondance (`EXISTS`, pour éviter la multiplication de lignes maintenant que plusieurs prévisions partagent une même heure) ne trouve une météo que pour les tout derniers snapshots Vélib' : 1518 correspondances sur 21252 lignes `station_status` au moment du test (~7%) — un chiffre qui varie à chaque run et ne fera que se dégrader si les deux pipelines ne tournent pas à la même fréquence. À corriger en Phase 3 : ajouter `past_days` à l'ingestion météo (approche hybride forecast + historique), et utiliser un `LEFT JOIN` depuis `station_status` plutôt qu'un `INNER JOIN` pour ne jamais perdre de lignes Vélib' silencieusement.
+
+## Tests
+
+```bash
+uv add --dev pytest    # déjà fait, dépendance de dev uniquement
+uv run pytest -v
+```
+
+`pytest` (dépendance de dev, jamais nécessaire en production) découvre automatiquement les fichiers `tests/test_*.py`. Le chemin `ingestion/` est ajouté au `pythonpath` via `[tool.pytest.ini_options]` dans `pyproject.toml`, pour que les tests puissent importer les modules d'ingestion directement (mêmes imports "voisins" qu'entre `meteo.py` et `http_util.py`).
+
+Couverture actuelle (`tests/test_meteo.py`) :
+
+- **Logique pure** (`parse_hourly_weather_data`) : reconstruction des tableaux parallèles Open-Meteo en liste de dicts, sur des données factices — aucun appel réseau.
+- **Cas limite** : `zip()` tronque silencieusement à la plus courte liste si les tableaux parallèles ont des longueurs différentes (comportement réel de Python, pas une supposition) — documenté par un test dédié.
+- **Mock de `fetch_json`** (fixture `monkeypatch`) : teste `get_weather()` (la resource `dlt` complète, avec l'ajout de `ingested_at`) sans jamais appeler Open-Meteo — rapide, déterministe, fonctionne hors-ligne. Ce test aurait détecté le bug corrigé en Partie 1 (`ingested_at` mal assigné) ; le test sur la logique pure seule ne l'aurait pas fait, puisqu'il ne couvre pas `get_weather`.
+
+Volontairement pas de test d'intégration (vraie base DuckDB, vrai appel réseau) à ce stade : la logique pure et le mock couvrent l'essentiel du risque, pour un coût de maintenance bien plus faible.
