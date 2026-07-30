@@ -10,7 +10,7 @@ from http_util import fetch_json
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-OPENMETEO_DISCOVERY_URL = "https://api.open-meteo.com/v1/forecast?latitude=48.8566&longitude=2.3522&hourly=temperature_2m,windspeed_10m,precipitation"
+OPENMETEO_DISCOVERY_URL = "https://api.open-meteo.com/v1/forecast?latitude=48.8566&longitude=2.3522&hourly=temperature_2m,windspeed_10m,precipitation&past_days=4"
 DB_PATH = "data/velib.duckdb"
 DATASET_NAME = "meteo_raw"
 
