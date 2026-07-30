@@ -1,0 +1,18 @@
+version: 2
+
+models:
+  - name: mart_correlation_meteo_usage
+    columns:
+      - name: station_snapshot_id
+        description: "The unique identifier for the station."
+        tests:
+          - not_null
+          - unique
+  - name: mart_disponibilite_station
+    columns:
+      - name: station_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('stg_station_information')
+                field: station_id

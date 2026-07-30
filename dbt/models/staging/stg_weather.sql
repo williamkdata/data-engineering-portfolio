@@ -1,0 +1,1 @@
+SELECT time, temperature_2m, windspeed_10m, precipitation, ingested_at FROM {{ source('meteo', 'weather') }}

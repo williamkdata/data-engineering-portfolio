@@ -1,0 +1,15 @@
+version: 2
+
+sources:
+  - name: velib
+    database: velib
+    schema: velib_raw
+    tables:
+      - name: station_status
+      - name: station_information
+
+  - name: meteo
+    database: velib
+    schema: meteo_raw
+    tables:
+      - name: weather 

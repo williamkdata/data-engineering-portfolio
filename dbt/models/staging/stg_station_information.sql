@@ -1,0 +1,1 @@
+SELECT station_id, name, capacity FROM {{ source('velib', 'station_information') }}
