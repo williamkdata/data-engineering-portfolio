@@ -80,3 +80,27 @@ Couverture actuelle (`tests/test_meteo.py`) :
 - **Mock de `fetch_json`** (fixture `monkeypatch`) : teste `get_weather()` (la resource `dlt` complète, avec l'ajout de `ingested_at`) sans jamais appeler Open-Meteo — rapide, déterministe, fonctionne hors-ligne. Ce test aurait détecté le bug corrigé en Partie 1 (`ingested_at` mal assigné) ; le test sur la logique pure seule ne l'aurait pas fait, puisqu'il ne couvre pas `get_weather`.
 
 Volontairement pas de test d'intégration (vraie base DuckDB, vrai appel réseau) à ce stade : la logique pure et le mock couvrent l'essentiel du risque, pour un coût de maintenance bien plus faible.
+
+## Phase 2 — Migration BigQuery (en cours)
+
+Migration du pipeline de DuckDB local vers BigQuery/GCP, projet dédié `velib-portfolio`.
+
+**Sécurité de l'historique météo** : `past_days` relevé de 4 à **92** (le maximum autorisé par Open-Meteo) — `past_days=4` créait un risque de trou définitif dans l'historique si le pipeline ne tournait pas pendant plus de 4 jours (l'API forecast ne rattrape jamais le passé au-delà de sa fenêtre glissante au moment de l'appel).
+
+**Setup GCP** : projet dédié (isolation facturation/quotas/suppression), région **`europe-west9`** (Paris — donnée jamais hors de France, argument RGPD/latence explicite plutôt que EU multi-région). Facturation activée + alerte de budget (non bloquante, juste informative). Authentification locale via **Application Default Credentials** (`gcloud auth application-default login`) — pas de clé JSON de compte de service, rien à protéger dans le repo.
+
+**Ingestion `dlt` paramétrable dev/prod** : une variable d'environnement `APP_ENV` (`duckdb` par défaut, `bigquery` sinon) choisit la destination sans dupliquer la logique des resources — `fetch_json`, `zip()`, `yield` restent identiques, seule la configuration du pipeline change (`get_destination()` dans `http_util.py`, partagée par `velib_gbfs.py` et `meteo.py`). Preuve concrète de l'agnosticisme de destination de `dlt` : les mêmes tables enfant générées pour les champs imbriqués (`station_status__num_bikes_available_types`, `station_information__rental_methods`) apparaissent à l'identique sur BigQuery.
+
+Lancer en BigQuery :
+
+```bash
+$env:APP_ENV = "bigquery"
+uv run python ingestion/velib_gbfs.py
+uv run python ingestion/meteo.py
+```
+
+Typage vérifié en sortie : `time`/`ingested_at` bien en `TIMESTAMP` (pas `DATETIME`) — `dlt` infère correctement le type à partir des chaînes ISO8601 avec fuseau horaire.
+
+**Fait à retenir sur la facturation** : une requête de contrôle qui ne scanne que 18,6 Ko a été facturée **10 Mio** — BigQuery applique un minimum de facturation de 10 Mio par requête, quel que soit le volume réellement scanné. Négligeable au vu du free tier (1 TiB/mois), mais un vrai réflexe de lecture de facture à avoir.
+
+Suite prévue : migration du projet dbt vers `--target bigquery` (portabilité SQL DuckDB/BigQuery), partitionnement/clustering des marts, mesures d'octets scannés avant/après.

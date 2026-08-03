@@ -9,13 +9,14 @@ Deux flux :
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import dlt
 import duckdb
-from http_util import fetch_json
+from http_util import fetch_json, get_destination
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -83,7 +84,6 @@ def print_control_query() -> None:
     print(f"Vélos dispos (ce run)   : {bikes_last_run} (à {last_run})")
     print(f"Historique station_status : {total_status_rows} lignes cumulées")
 
-
 def main() -> None:
     start = time.perf_counter()
     Path("data").mkdir(exist_ok=True)
@@ -92,7 +92,7 @@ def main() -> None:
 
     pipeline = dlt.pipeline(
         pipeline_name="velib_gbfs",
-        destination=dlt.destinations.duckdb(credentials=DB_PATH),
+        destination=get_destination(DB_PATH),
         dataset_name=DATASET_NAME,
     )
 
@@ -104,7 +104,8 @@ def main() -> None:
     )
     logger.info(load_info)
 
-    print_control_query()
+    if os.environ.get("APP_ENV", "duckdb") == "duckdb":
+        print_control_query()
 
     logger.info("Run terminé en %.1fs", time.perf_counter() - start)
 

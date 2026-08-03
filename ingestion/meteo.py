@@ -1,11 +1,12 @@
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import dlt
 import duckdb
-from http_util import fetch_json
+from http_util import fetch_json, get_destination
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -59,10 +60,10 @@ def print_control_query() -> None:
 def main():
     start = time.perf_counter()
     Path("data").mkdir(exist_ok=True)
-
+         
     pipeline = dlt.pipeline(
         pipeline_name="meteo_pipeline",
-        destination=dlt.destinations.duckdb(credentials=DB_PATH),
+        destination=get_destination(DB_PATH),
         dataset_name=DATASET_NAME,
     )
     load_info = pipeline.run(
@@ -71,7 +72,8 @@ def main():
         ]
     )
     logger.info(load_info)
-    print_control_query()
+    if os.environ.get("APP_ENV", "duckdb") == "duckdb":
+            print_control_query()
     logger.info("Run terminé en %.1fs", time.perf_counter() - start)
 
 if __name__ == "__main__":
