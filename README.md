@@ -121,4 +121,33 @@ uv run dbt test --target prod --project-dir dbt
 
 **Résultat** : `dbt run`/`dbt test` passent au vert sur `dev` **et** `prod`, sans aucune duplication de modèle — un seul jeu de fichiers `.sql`, deux entrepôts cibles.
 
-Suite prévue : partitionnement/clustering des marts, mesures d'octets scannés avant/après.
+### Partitionnement, clustering et mesure du coût réel
+
+`mart_correlation_meteo_usage` (BigQuery uniquement, config conditionnée par `{% if target.name == 'prod' %}`) :
+
+```sql
+{{ config(
+    partition_by={"field": "ingested_at", "data_type": "timestamp", "granularity": "day"},
+    cluster_by=["station_id"]
+) }}
+```
+
+- **Partitionné par jour sur `ingested_at`** : les requêtes filtrées par date (le cas d'usage principal — "l'usage d'aujourd'hui", "la semaine dernière") ne lisent que les partitions concernées, pas la table entière.
+- **Clusterisé par `station_id`** : à l'intérieur d'une partition, les lignes d'une même station sont stockées à proximité — utile pour l'analyse par station sur une journée donnée.
+
+**Trois mesures réelles** (dry run, avant toute exécution facturée), sur un historique backfillé depuis DuckDB pour un volume représentatif (33 400 lignes) :
+
+| Comparaison | Octets traités | Réduction |
+|---|---|---|
+| Sans partitionnement | 1 068 672 | — |
+| Avec partitionnement (même requête, filtrée par jour) | 291 456 | **~73%** |
+| `SELECT *` (toutes colonnes) | 737 106 | — |
+| Colonnes explicites (3/6) | 291 456 | **~60%** |
+
+**Conversion en coût, et une nuance honnête à connaître** : au tarif on-demand (6,25 $/TiB), ces volumes représentent $0,000001 à $0,000006 — négligeable. Mais BigQuery applique un **minimum de facturation de 10 Mio par requête** (déjà repéré en Partie 2) : à ce volume de test, ce plancher (10 485 760 octets, $0,00006) est **supérieur** à toutes les requêtes mesurées — les optimisations ne changent donc rien à la facture réelle à cette échelle. Ce qui reste vrai et vaut la peine d'être formulé en entretien : la **réduction en pourcentage d'octets traités** (73%, 60%) est le signal qui compte — sur une table de production dépassant ce plancher, le même pourcentage se traduit directement en économies réelles.
+
+Vérification de la config appliquée (metadata BigQuery, pas juste acceptée syntaxiquement) :
+```
+Partitioning: TimePartitioning(field='ingested_at', type_='DAY')
+Clustering: ['station_id']
+```

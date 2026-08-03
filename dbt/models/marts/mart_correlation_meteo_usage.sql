@@ -1,3 +1,10 @@
+{% if target.name == 'prod' %}
+
+{{ config(
+    partition_by={"field": "ingested_at", "data_type": "timestamp", "granularity": "day"},cluster_by=["station_id"]
+) }}
+
+{% endif %}
 WITH meteo_dedup AS (
     SELECT *, ROW_NUMBER() OVER (PARTITION BY time ORDER BY ingested_at ASC) AS rang
     FROM {{ ref('stg_weather') }}
