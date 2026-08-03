@@ -103,4 +103,22 @@ Typage vérifié en sortie : `time`/`ingested_at` bien en `TIMESTAMP` (pas `DATE
 
 **Fait à retenir sur la facturation** : une requête de contrôle qui ne scanne que 18,6 Ko a été facturée **10 Mio** — BigQuery applique un minimum de facturation de 10 Mio par requête, quel que soit le volume réellement scanné. Négligeable au vu du free tier (1 TiB/mois), mais un vrai réflexe de lecture de facture à avoir.
 
-Suite prévue : migration du projet dbt vers `--target bigquery` (portabilité SQL DuckDB/BigQuery), partitionnement/clustering des marts, mesures d'octets scannés avant/après.
+### Migration dbt — cibles multiples `dev`/`prod`
+
+`~/.dbt/profiles.yml` déclare deux `outputs` sous le même profil : `dev` (DuckDB, comme avant) et `prod` (BigQuery, `method: oauth` via l'ADC déjà configuré, `location: europe-west9`, `maximum_bytes_billed: 1073741824` — 1 Gio, le garde-fou qui rejette une requête avant exécution si elle dépasserait ce volume). Noms choisis volontairement neutres (environnement, pas fournisseur) : le code ne doit pas savoir qu'un jour `prod` pourrait pointer vers autre chose que BigQuery.
+
+```bash
+uv run dbt run --target prod --project-dir dbt
+uv run dbt test --target prod --project-dir dbt
+```
+
+**Portabilité SQL — incompatibilités réelles rencontrées et corrigées** (via des conditions Jinja `{{ ... if target.name == 'dev' else ... }}`, pour que le même fichier `.sql` génère la syntaxe adaptée à la cible active) :
+- `database:` des sources (`sources.yml`) : codé en dur sur `velib` (le nom interne du fichier `.duckdb`), sans aucun sens sur BigQuery où `database` désigne le projet GCP (`velib-portfolio`).
+- `date_trunc('hour', ts)` (DuckDB) vs `TIMESTAMP_TRUNC(ts, HOUR)` (BigQuery) : nom de fonction différent, ordre des arguments inversé, date part sans guillemets côté BigQuery.
+- `CAST(... AS VARCHAR)` (DuckDB) vs `CAST(... AS STRING)` (BigQuery) : même besoin, nom de type différent.
+
+**Une incompatibilité anticipée qui ne s'est pas confirmée** : `QUALIFY` référençant un alias défini dans le même `SELECT` (`ROW_NUMBER() OVER (...) AS rang ... QUALIFY rang = 1`) fonctionne sans modification sur BigQuery — malgré une inquiétude initiale sur ce point. Rappel utile : tester vaut mieux que supposer, même quand la supposition semble bien fondée.
+
+**Résultat** : `dbt run`/`dbt test` passent au vert sur `dev` **et** `prod`, sans aucune duplication de modèle — un seul jeu de fichiers `.sql`, deux entrepôts cibles.
+
+Suite prévue : partitionnement/clustering des marts, mesures d'octets scannés avant/après.

@@ -2,7 +2,7 @@ version: 2
 
 sources:
   - name: velib
-    database: velib
+    database: "{{'velib' if target.name == 'dev' else 'velib-portfolio'}}"
     description: "This source contains the raw data from the Velib system."
     schema: velib_raw
     tables:
@@ -10,7 +10,7 @@ sources:
       - name: station_information
 
   - name: meteo
-    database: velib
+    database: "{{'velib' if target.name == 'dev' else 'velib-portfolio'}}"
     description: "This source contains the raw data from the Meteo system."
     schema: meteo_raw
     tables:
