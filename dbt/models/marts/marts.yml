@@ -2,15 +2,18 @@ version: 2
 
 models:
   - name: mart_correlation_meteo_usage
+    description: "This mart contains the correlation between weather data and station usage."
     columns:
       - name: station_snapshot_id
-        description: "The unique identifier for the station."
+        description: "The unique identifier for the station at a specific point in time."
         tests:
           - not_null
           - unique
   - name: mart_disponibilite_station
+    description: "This mart contains the availability of stations."
     columns:
       - name: station_id
+        description: "The unique identifier for the station."
         tests:
           - relationships:
               arguments:

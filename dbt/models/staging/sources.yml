@@ -3,6 +3,7 @@ version: 2
 sources:
   - name: velib
     database: velib
+    description: "This source contains the raw data from the Velib system."
     schema: velib_raw
     tables:
       - name: station_status
@@ -10,6 +11,7 @@ sources:
 
   - name: meteo
     database: velib
+    description: "This source contains the raw data from the Meteo system."
     schema: meteo_raw
     tables:
       - name: weather 

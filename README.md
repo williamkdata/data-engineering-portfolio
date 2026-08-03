@@ -37,7 +37,32 @@ uv run python ingestion/meteo.py
 - **Dataset séparé (`meteo_raw` vs `velib_raw`)**, un fichier par source (`meteo.py` vs `velib_gbfs.py`) — même principe de séparation par fonctionnalité. Un dataset distinct n'empêche pas les jointures : `velib_raw.station_status` et `meteo_raw.weather` se croisent normalement en qualifiant les tables.
 - **Transformation des tableaux parallèles.** L'API Open-Meteo renvoie ses variables horaires en tableaux parallèles (`hourly.time`, `hourly.temperature_2m`, ...), pas en liste d'objets — reconstruits en une liste de dicts (une ligne par heure) via `zip()`.
 
-**Couverture temporelle — corrigée et mesurée.** Sans `past_days`, la fenêtre météo était une fenêtre glissante (aujourd'hui + 7 jours) alors que l'historique Vélib' s'accumule et vieillit : seulement ~7% des lignes `station_status` trouvaient une météo correspondante (1518/21252). Fix : `past_days=4` sur l'appel Open-Meteo — cohérent avec la décision ci-dessus (on reste sur de la donnée modèle/prévisionnelle, juste sur une fenêtre plus large en arrière, pas un compromis vers de l'observation réelle). Résultat mesuré après le fix : **100% de couverture** (22770/22770 lignes `station_status` trouvent une météo à l'heure correspondante, via une jointure par existence `EXISTS`). Reste à faire en Phase 3 : utiliser un `LEFT JOIN` depuis `station_status` plutôt qu'un `INNER JOIN` dans les modèles dbt, pour ne jamais perdre de lignes Vélib' silencieusement si la couverture redescendait un jour (ex. si les deux pipelines cessent de tourner à la même fréquence).
+**Couverture temporelle — corrigée et mesurée.** Sans `past_days`, la fenêtre météo était une fenêtre glissante (aujourd'hui + 7 jours) alors que l'historique Vélib' s'accumule et vieillit : seulement ~7% des lignes `station_status` trouvaient une météo correspondante (1518/21252). Fix : `past_days=4` sur l'appel Open-Meteo — cohérent avec la décision ci-dessus (on reste sur de la donnée modèle/prévisionnelle, juste sur une fenêtre plus large en arrière, pas un compromis vers de l'observation réelle). Résultat mesuré après le fix : **100% de couverture** (22770/22770 lignes `station_status` trouvent une météo à l'heure correspondante, via une jointure par existence `EXISTS`).
+
+## Phase 3 — Transformation avec dbt
+
+dbt transforme la donnée brute (chargée par `dlt`) **dans** DuckDB — aucun déplacement de données, juste du SQL exécuté sur place et matérialisé en vue/table (ELT, par opposition à l'ETL classique). Choix de version : `dbt-core` (ligne classique 1.x) + `dbt-duckdb`, pas la nouvelle génération Fusion/dbt 2.0 (alpha/bêta mi-2026, support DuckDB encore bêta) — priorité à la stabilité en dev local.
+
+Configuration : `dbt/dbt_project.yml` (versionné) + `~/.dbt/profiles.yml` (hors repo, pointe vers `data/velib.duckdb`).
+
+Lancer :
+
+```bash
+uv run dbt run --project-dir dbt      # construit tous les modèles
+uv run dbt test --project-dir dbt     # exécute les tests de données
+uv run dbt docs generate --project-dir dbt && uv run dbt docs serve --project-dir dbt  # DAG visuel
+```
+
+**Architecture en couches :**
+- **staging** (`stg_*`, vues) : un modèle par table source, renommage léger, colonnes explicites. `stg_station_status` calcule `snapshot_hour` (`date_trunc('hour', ingested_at)`), nécessaire à toute jointure horaire en aval.
+- **intermediate** (`int_station_variation`) : la variation de vélos par station entre deux snapshots (`LAG`, logique réutilisée d'une session SQL antérieure), avec `ingested_at` en second critère de tri — nécessaire car plusieurs ingestions peuvent tomber dans la même heure arrondie (égalités réelles mesurées sur les données).
+- **marts** (tables) :
+  - `mart_correlation_meteo_usage` : le mart phare. `LEFT JOIN` depuis `stg_station_status` (jamais `INNER`, pour ne pas perdre de lignes Vélib' silencieusement). La météo est dédupliquée à 1 ligne/heure avant la jointure (`ROW_NUMBER` + `QUALIFY`, la prévision la plus ancienne captée pour cette heure — cohérente avec la décision "les gens réagissent à la prévision vue avant de sortir"). Clé de substitution `station_snapshot_id` basée sur `ingested_at` (pas `snapshot_hour` : le vrai grain de ce mart est "une station, un run d'ingestion précis", découvert via un test d'unicité qui échouait sur la clé composite naïve).
+  - `mart_disponibilite_station` : agrégats simples (moyennes/max de vélos et docks disponibles) par station et par heure.
+
+**Tests dbt** (nature différente des tests `pytest` : ceux-ci vérifient la **donnée** dans l'entrepôt, pas le code) :
+- Génériques (YAML) : `not_null` + `unique` sur `station_snapshot_id`, `relationships` (intégrité référentielle) entre `mart_disponibilite_station.station_id` et `stg_station_information.station_id`.
+- Singulier (`tests/assert_bikes_available_coherent.sql`) : `num_bikes_available` ne doit être ni négatif ni supérieur à `capacity`. Résultat réel : **86 violations**, uniquement des dépassements de capacité (jamais de négatif) — phénomène réel des systèmes de vélos en libre-service (rééquilibrage, usagers qui reposent un vélo sur une station "pleine"), pas un bug de pipeline. Configuré en `severity='warn'` : informatif, non bloquant, mais documenté comme cas réel du terrain.
 
 ## Tests
 
