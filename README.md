@@ -1,6 +1,8 @@
 # data-engineering-portfolio
 
-Pipeline data engineering "walking skeleton" sur les données open data Vélib' Métropole (GBFS) et la météo Open-Meteo, avec une stack qui monte en puissance milestone après milestone : dlt → DuckDB (dev) / BigQuery (prod) → dbt → marts, Airflow prévu ensuite.
+[![CI](https://github.com/williamkdata/data-engineering-portfolio/actions/workflows/ci.yml/badge.svg)](https://github.com/williamkdata/data-engineering-portfolio/actions/workflows/ci.yml)
+
+Pipeline data engineering "walking skeleton" sur les données open data Vélib' Métropole (GBFS) et la météo Open-Meteo : dlt → DuckDB (dev) / BigQuery (prod) → dbt → marts, orchestré par Airflow (local, Docker Compose), infrastructure GCP gérée par Terraform, CI GitHub Actions (tests + validation dbt).
 
 ## Architecture
 
@@ -121,7 +123,7 @@ Couverture actuelle (`tests/test_meteo.py`) :
 
 Volontairement pas de test d'intégration (vraie base DuckDB, vrai appel réseau) à ce stade : la logique pure et le mock couvrent l'essentiel du risque, pour un coût de maintenance bien plus faible.
 
-## Phase 2 — Migration BigQuery (en cours)
+## Phase 2 — Migration BigQuery (terminée)
 
 Migration du pipeline de DuckDB local vers BigQuery/GCP, projet dédié `velib-portfolio`.
 
@@ -157,8 +159,6 @@ uv run dbt test --target prod --project-dir dbt
 - `date_trunc('hour', ts)` (DuckDB) vs `TIMESTAMP_TRUNC(ts, HOUR)` (BigQuery) : nom de fonction différent, ordre des arguments inversé, date part sans guillemets côté BigQuery.
 - `CAST(... AS VARCHAR)` (DuckDB) vs `CAST(... AS STRING)` (BigQuery) : même besoin, nom de type différent.
 
-**Une incompatibilité anticipée qui ne s'est pas confirmée** : `QUALIFY` référençant un alias défini dans le même `SELECT` (`ROW_NUMBER() OVER (...) AS rang ... QUALIFY rang = 1`) fonctionne sans modification sur BigQuery — malgré une inquiétude initiale sur ce point. Rappel utile : tester vaut mieux que supposer, même quand la supposition semble bien fondée.
-
 **Résultat** : `dbt run`/`dbt test` passent au vert sur `dev` **et** `prod`, sans aucune duplication de modèle — un seul jeu de fichiers `.sql`, deux entrepôts cibles.
 
 ### Partitionnement, clustering et mesure du coût réel
@@ -184,10 +184,84 @@ uv run dbt test --target prod --project-dir dbt
 | `SELECT *` (toutes colonnes) | 737 106 | — |
 | Colonnes explicites (3/6) | 291 456 | **~60%** |
 
-**Conversion en coût, et une nuance honnête à connaître** : au tarif on-demand (6,25 $/TiB), ces volumes représentent $0,000001 à $0,000006 — négligeable. Mais BigQuery applique un **minimum de facturation de 10 Mio par requête** (déjà repéré en Partie 2) : à ce volume de test, ce plancher (10 485 760 octets, $0,00006) est **supérieur** à toutes les requêtes mesurées — les optimisations ne changent donc rien à la facture réelle à cette échelle. Ce qui reste vrai et vaut la peine d'être formulé en entretien : la **réduction en pourcentage d'octets traités** (73%, 60%) est le signal qui compte — sur une table de production dépassant ce plancher, le même pourcentage se traduit directement en économies réelles.
+**Conversion en coût, et une nuance honnête à connaître** : au tarif on-demand (6,25 $/TiB), ces volumes représentent $0,000001 à $0,000006 — négligeable. Mais BigQuery applique un **minimum de facturation de 10 Mio par requête** (déjà repéré en Partie 2) : à ce volume de test, ce plancher (10 485 760 octets, $0,00006) est **supérieur** à toutes les requêtes mesurées — les optimisations ne changent donc rien à la facture réelle à cette échelle. Ce qui reste pertinent : la **réduction en pourcentage d'octets traités** (73%, 60%) est le signal qui compte — sur une table de production dépassant ce plancher, le même pourcentage se traduit directement en économies réelles.
 
 Vérification de la config appliquée (metadata BigQuery, pas juste acceptée syntaxiquement) :
 ```
 Partitioning: TimePartitioning(field='ingested_at', type_='DAY')
 Clustering: ['station_id']
 ```
+
+## Phase 4 — Orchestration (Airflow, Terraform, CI)
+
+### Pourquoi orchestrer — justification métier, pas décorative
+
+Open-Meteo (`/v1/forecast`) n'expose qu'une **fenêtre glissante** de `past_days=92` : à chaque appel, l'API ne remonte que 92 jours en arrière, jamais plus. Si le pipeline ne tourne pas pendant plus de 92 jours, le trou dans l'historique météo devient **définitif et irrécupérable** — impossible de rejouer le passé au-delà de cette fenêtre. L'orchestration répond donc à une contrainte de fraîcheur mesurable, pas à "montrer qu'on sait utiliser Airflow".
+
+### Airflow en local (Docker Compose)
+
+Airflow 3.3.0 via le quickstart officiel Docker Compose, avec un `Dockerfile` qui étend l'image officielle (`dlt`, `duckdb`, `dbt-core`, `dbt-bigquery`, `dbt-duckdb` — absents de l'image de base) et des montages supplémentaires pour `ingestion/`, `dbt/`, `data/`.
+
+Plusieurs containers séparés, chacun un rôle précis — l'équivalent éclaté de ce qu'un TAC (Talend Administration Center) fait dans une seule interface :
+- **scheduler** : décide QUAND une tâche démarre, ne l'exécute jamais lui-même.
+- **dag-processor** : lit les fichiers `.py` de `dags/` et les transforme en DAGs utilisables.
+- **worker** : exécute réellement le travail (lance les scripts, `dbt run`/`dbt test`).
+- **apiserver** : sert l'interface web.
+- **postgres** : base de métadonnées (DAGs, runs, statuts).
+- **redis** : file d'attente entre le scheduler et les workers.
+
+Différence structurelle avec TAC : dans TAC, la planification se configure par des clics dans une interface. Dans Airflow, elle est **déclarée en code Python**, versionnable et reviewable comme n'importe quel fichier du repo.
+
+### Stratégie de credentials — compte de service dédié
+
+Un container Airflow tourne sans supervision : impossible d'utiliser l'authentification interactive (ADC utilisateur) qui fonctionne en local. Un **compte de service** dédié (`airflow-velib@velib-portfolio.iam.gserviceaccount.com`) porte à la place les droits nécessaires, au **moindre privilège** : `roles/bigquery.jobUser` (niveau projet, lancer des requêtes) + `roles/bigquery.dataEditor` (niveau dataset, sur `velib_raw`, `meteo_raw`, `velib_analytics`) — jamais un rôle large type Editor/Admin.
+
+La clé JSON du compte de service vit dans `secrets/` (gitignoré, jamais commis), montée en lecture seule dans les containers. Une clé Fernet (dans `.env`, gitignoré) chiffre les champs sensibles que Airflow pourrait stocker en base.
+
+Le target dbt `prod` (déjà utilisé en Phase 2 pour BigQuery) bascule automatiquement sa méthode d'authentification selon le contexte, sans créer de 3ᵉ target :
+
+```yaml
+method: "{{ 'service-account' if env_var('DBT_GCP_KEYFILE', '') else 'oauth' }}"
+keyfile: "{{ env_var('DBT_GCP_KEYFILE', '') }}"
+```
+
+`oauth`/ADC en local (rien défini), `service-account` dans les containers (`DBT_GCP_KEYFILE` pointe vers la clé). Même fichier `dbt/profiles/profiles.yml`, commis (aucun secret dedans — juste un chemin vers un fichier lui-même gitignoré), réutilisé à l'identique pour Airflow **et** la CI (voir plus bas).
+
+### Le DAG
+
+```
+[ingest_velib, ingest_meteo] >> dbt_run >> dbt_test
+```
+
+- **Parallèle, pas séquentiel** pour les deux ingestions : aucune dépendance de données entre les deux sources.
+- **`BashOperator`** pour les 4 tâches (pas `PythonOperator`) : reproduit exactement l'usage CLI manuel déjà en place, isolation par sous-processus, `dbt` n'est de toute façon pas une fonction Python importable.
+- **`schedule="0 * * * *"`** (horaire) : aligné sur le grain déjà présent dans les modèles (`snapshot_hour`, tronqué à l'heure) et sur la résolution horaire d'Open-Meteo.
+- **`catchup=False`** : ce pipeline capture un état courant, rejouer les créneaux manqués n'a pas de sens métier.
+- **`retries=2`, `retry_delay=5min`** : absorbe les pannes transitoires (API externe, réseau) sans intervention manuelle.
+- **`max_active_runs=1`** — voir le retour d'expérience ci-dessous, ce n'est pas une précaution théorique.
+
+Note technique : `env=` sur un `BashOperator` **remplace tout l'environnement du sous-processus** (y compris `PATH`) sauf si `append_env=True` est explicitement précisé — sans ça, `python`/`dbt` deviennent introuvables dans le sous-processus.
+
+### Idempotence et exécutions concurrentes
+
+En testant, plusieurs déclenchements manuels rapprochés ont fait tourner **3 dag runs simultanément** (confirmé via `airflow dags list-runs`, tous à l'état `running` en même temps). Deux exécutions concurrentes de `ingest_velib` ont chacune fait un `APPEND` dans la même table BigQuery au même moment → **1518 lignes dupliquées** (chaque station présente deux fois, avec le même `ingested_at`). Détecté immédiatement par le test dbt `unique` sur `station_snapshot_id` — exactement son rôle. Diagnostiqué par élimination (API GBFS propre → pipeline `dlt` isolé propre → seule l'exécution concurrente via Airflow dupliquait), corrigé par `max_active_runs=1`, données nettoyées, mart reconstruit, tests repassés au vert, puis un run complet sans intervention manuelle confirmé.
+
+**La nuance importante** : `max_active_runs=1` **sérialise** l'exécution — il empêche deux runs de tourner en même temps. Ce n'est **pas** la même chose qu'une **écriture idempotente**. L'écriture reste un `APPEND` : si une tâche échoue en cours de route et qu'Airflow la retente, chaque tentative génère un nouveau `ingested_at` et ajoute une nouvelle ligne — ce n'est pas un doublon strict (deux lignes identiques), mais ce n'est pas non plus une opération qu'on peut rejouer sans aucun effet. La vraie réponse architecturale à une idempotence stricte serait une **écriture rejouable** : soit un `merge` sur une clé stable (station_id + intervalle planifié, via le `logical_date` plutôt que `datetime.now()`), soit un `delete`+`insert` ciblé sur la partition concernée avant d'écrire. Aucune des deux n'est implémentée ici — complexité volontairement non ajoutée pour ce projet, un compromis assumé et documenté plutôt qu'ignoré.
+
+### Terraform minimal — les ressources GCP existantes
+
+Périmètre strict : les 3 datasets BigQuery, le compte de service `airflow-velib` et ses 4 attributions IAM, tous créés à la main en amont. Objectif assumé : documenter l'infra comme du code plutôt que devenir expert IaC.
+
+Point pédagogique central : ces 8 ressources **existaient déjà**. Un `terraform apply` naïf a échoué avec 4 erreurs `Already Exists` — Terraform ne recrée jamais une ressource par-dessus une existante, il refuse simplement. Résolu avec `terraform import` (8 imports, un par ressource), qui associe l'existant au state **sans rien créer ni modifier**. `terraform plan` a ensuite révélé que la configuration ne correspondait pas exactement à la réalité — corrigée jusqu'à obtenir **`No changes`**, le critère de validation d'un import réussi : le state reflète exactement ce qui existe. Une modification volontaire (description sur les 3 datasets) a ensuite validé le cycle `plan`/`apply` complet, de bout en bout.
+
+Limite assumée : le state est local (gitignoré), pas de backend distant — si ce repo est cloné sur une autre machine, Terraform ne sait plus rien de ces ressources tant qu'on ne réimporte pas. Le prix du périmètre volontairement resserré (pas de backend distant, pas de modules/workspaces).
+
+### CI GitHub Actions
+
+Deux étapes dans un seul workflow (`.github/workflows/ci.yml`), déclenché sur `push` et `pull_request` :
+- `uv sync` + `uv run pytest` — valide le **code** (logique Python pure, jamais de vraie donnée chargée).
+- `uv run dbt parse --profiles-dir dbt/profiles --project-dir dbt --target dev` — valide la syntaxe SQL, les `ref()`/`source()` et le Jinja, sans exécuter de requête ni charger de donnée. Le `profiles.yml` local vivant hors repo (jamais présent sur un runner GitHub), la CI réutilise `dbt/profiles/profiles.yml`, déjà commis pour les containers Airflow — un seul fichier de profils partagé entre les deux contextes.
+
+**Pourquoi `dbt parse` et pas `dbt build --target dev`** : `data/` est gitignoré, aucun fichier source sur un runner frais. Pourquoi pas BigQuery directement depuis la CI : nécessiterait un secret GitHub ou une Workload Identity Federation (la bonne réponse professionnelle, pour éviter une clé longue durée stockée) — délibérément hors périmètre, aucun credential GCP ne doit entrer dans la CI de ce projet. `dbt parse` couvre déjà la majorité des régressions probables (un `ref()` cassé, un Jinja mal fermé) pour un coût de mise en place minimal.
+
+Badge de statut en haut de ce README, workflow vérifié vert sur GitHub (pas seulement en local).
