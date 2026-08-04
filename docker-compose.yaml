@@ -49,8 +49,8 @@ x-airflow-common:
   # In order to add custom dependencies or upgrade provider distributions you can use your extended image.
   # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
   # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.3.0}
-  # build: .
+  image: ${AIRFLOW_IMAGE_NAME:-airflow-velib:3.3.0}
+  build: .
   env_file:
     - ${ENV_FILE_PATH:-.env}
   environment:
@@ -76,12 +76,18 @@ x-airflow-common:
     _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    DBT_PROFILES_DIR: '/opt/airflow/dbt/profiles'
+    GOOGLE_APPLICATION_CREDENTIALS: '/opt/airflow/secrets/airflow-velib-key.json'
+    DBT_GCP_KEYFILE: '/opt/airflow/secrets/airflow-velib-key.json'
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-.}/secrets:/opt/airflow/secrets:ro
+    - ${AIRFLOW_PROJ_DIR:-.}/ingestion:/opt/airflow/ingestion
+    - ${AIRFLOW_PROJ_DIR:-.}/dbt:/opt/airflow/dbt
+    - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/airflow/data
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on

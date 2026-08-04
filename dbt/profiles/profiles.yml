@@ -1,0 +1,22 @@
+# Profiles utilisable depuis les containers Airflow (DBT_PROFILES_DIR).
+# Meme structure que ~/.dbt/profiles.yml (hors repo) : seuls "dev" et "prod"
+# existent, comme partout ailleurs dans le projet. La methode d'auth de
+# "prod" s'adapte au contexte via DBT_GCP_KEYFILE (vide en local -> oauth/ADC,
+# renseignee dans le container -> compte de service) plutot que d'ajouter un
+# 3e target. Aucun secret ici : seulement un chemin vers un fichier gitignore.
+velib_analytics:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: data/velib.duckdb
+      threads: 1
+    prod:
+      type: bigquery
+      method: "{{ 'service-account' if env_var('DBT_GCP_KEYFILE', '') else 'oauth' }}"
+      keyfile: "{{ env_var('DBT_GCP_KEYFILE', '') }}"
+      project: velib-portfolio
+      dataset: velib_analytics
+      location: europe-west9
+      threads: 1
+      maximum_bytes_billed: 1073741824
