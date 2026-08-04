@@ -15,6 +15,14 @@ data/
 dbt/target/
 dbt/logs/
 logs/
+plugins/
+config/
+
+# Credentials GCP / Terraform (jamais versionnes)
+secrets/
+*.tfstate
+*.tfstate.*
+.terraform/
 
 # OS / éditeur
 .DS_Store
