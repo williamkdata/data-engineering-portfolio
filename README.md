@@ -1,6 +1,46 @@
 # data-engineering-portfolio
 
-Pipeline data engineering "walking skeleton" sur les données open data Vélib' Métropole (GBFS), avec une stack qui monte en puissance milestone après milestone : dlt → DuckDB (local) → dbt Core → Airflow, bascule BigQuery prévue plus tard.
+Pipeline data engineering "walking skeleton" sur les données open data Vélib' Métropole (GBFS) et la météo Open-Meteo, avec une stack qui monte en puissance milestone après milestone : dlt → DuckDB (dev) / BigQuery (prod) → dbt → marts, Airflow prévu ensuite.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Sources["Sources externes"]
+        A["API GBFS Vélib'"]
+        B["API Open-Meteo"]
+    end
+
+    subgraph Ingestion["Ingestion (dlt)"]
+        C["velib_gbfs.py"]
+        D["meteo.py"]
+    end
+
+    subgraph Entrepot["Entrepôt (APP_ENV)"]
+        E[("DuckDB — dev")]
+        F[("BigQuery — prod\nvelib-portfolio, europe-west9")]
+    end
+
+    subgraph Transformation["dbt (--target dev / prod)"]
+        G["staging\nstg_station_status, stg_station_information, stg_weather"]
+        H["intermediate\nint_station_variation"]
+        I["marts\nmart_correlation_meteo_usage\nmart_disponibilite_station"]
+    end
+
+    A --> C
+    B --> D
+    C --> E
+    C --> F
+    D --> E
+    D --> F
+    E --> G
+    F --> G
+    G --> H
+    G --> I
+    H --> I
+```
+
+Même code d'ingestion et mêmes modèles dbt pour les deux entrepôts — seule la configuration change (`APP_ENV` côté `dlt`, `--target` côté `dbt`).
 
 ## M1 — Ingestion GBFS Vélib' → DuckDB
 
