@@ -20,4 +20,4 @@ jobs:
       - run: uv run pytest
 
       - name: Validate dbt syntax
-        run: uv run dbt parse --project-dir dbt --target dev
+        run: uv run dbt parse --profiles-dir dbt/profiles --project-dir dbt --target dev
