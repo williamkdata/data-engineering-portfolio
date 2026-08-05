@@ -265,3 +265,20 @@ Deux étapes dans un seul workflow (`.github/workflows/ci.yml`), déclenché sur
 **Pourquoi `dbt parse` et pas `dbt build --target dev`** : `data/` est gitignoré, aucun fichier source sur un runner frais. Pourquoi pas BigQuery directement depuis la CI : nécessiterait un secret GitHub ou une Workload Identity Federation (la bonne réponse professionnelle, pour éviter une clé longue durée stockée) — délibérément hors périmètre, aucun credential GCP ne doit entrer dans la CI de ce projet. `dbt parse` couvre déjà la majorité des régressions probables (un `ref()` cassé, un Jinja mal fermé) pour un coût de mise en place minimal.
 
 Badge de statut en haut de ce README, workflow vérifié vert sur GitHub (pas seulement en local).
+
+## Modélisation dimensionnelle — snapshot SCD2 et étoile minimale
+
+Les marts existants (`mart_correlation_meteo_usage`, `mart_disponibilite_station`) sont des tables larges dénormalisées — un style pertinent sur un entrepôt colonnaire cloud (pas de coût de jointure comparable à un moteur relationnel, column pruning). Ce volet ajoute, en complément et sans les remplacer, un schéma en étoile minimal (une table de faits, deux dimensions) pour couvrir l'autre style de modélisation courant sur ce type de projet — historisation SCD2 comprise.
+
+**Historisation** : `station_information` était chargée en `REPLACE` (SCD Type 1 — l'historique des changements de capacité ou de nom d'une station était perdu à chaque run). Un snapshot dbt (`station_information_snapshot`, stratégie `check` sur `capacity`/`name` — aucune colonne de mise à jour fiable côté source, `timestamp` inutilisable) historise ces changements en Type 2 : une nouvelle ligne à chaque changement détecté, avec un intervalle de validité (`dbt_valid_from`/`dbt_valid_to`). Mécanisme validé par un changement réel simulé et observé (fermeture de l'ancienne ligne, ouverture d'une nouvelle) avant mise en production du modèle.
+
+**Étoile minimale** :
+- `dim_station` : historique complet (pas seulement la version courante), alimentée depuis le snapshot. Point de conception : les faits du projet couvrent une période antérieure au premier run du snapshot (l'historisation ne peut pas être rétroactive) — la version la plus ancienne de chaque station est donc considérée valide dès le début de l'historique des faits, plutôt que de laisser ces faits sans dimension associée.
+- `dim_temps` : grain horaire, généré (pas de table source pour le temps), cohérent avec la résolution des données Vélib'/météo.
+- `fct_station_snapshot` : grain station + run d'ingestion (identique à `mart_correlation_meteo_usage`), mesures (vélos/docks disponibles, variation), clés étrangères vers les dimensions — dont la clé de substitution du snapshot (`dbt_scd_id`) pour `dim_station`, nécessaire dès qu'une dimension est historisée (`station_id` seul ne désigne plus une ligne unique). Partitionnée par jour sur `ingested_at`, clusterisée par `station_id`, comme le mart existant.
+
+**Portabilité dev/prod** : la génération de la dimension temporelle (`generate_series` en DuckDB vs `UNNEST(GENERATE_TIMESTAMP_ARRAY(...))` en BigQuery, syntaxe d'intervalle différente, `EXTRACT(dow ...)` vs `EXTRACT(DAYOFWEEK ...)` avec une numérotation décalée) a nécessité les mêmes bascules Jinja conditionnelles sur `target.name` que le reste du projet.
+
+**Tests** : génériques (`not_null`/`unique` sur le grain de `fct_station_snapshot`, `unique` sur la clé de substitution de `dim_station`, `relationships` vers les deux dimensions) et un test singulier propre à la SCD2 (`assert_one_current_row_per_station`, `severity='error'` — une violation signifierait un vrai bug du mécanisme d'historisation, pas un phénomène métier à documenter).
+
+Intégré au DAG Airflow (`dbt_snapshot` entre l'ingestion et `dbt_run` — la dimension doit être historisée avant que les modèles qui la consomment ne se reconstruisent), et à Terraform (le dataset créé par le premier run du snapshot est déclaré et importé, avec les droits IAM du compte de service étendus).

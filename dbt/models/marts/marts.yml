@@ -9,6 +9,7 @@ models:
         tests:
           - not_null
           - unique
+  
   - name: mart_disponibilite_station
     description: "This mart contains the availability of stations."
     columns:
@@ -19,3 +20,49 @@ models:
               arguments:
                 to: ref('stg_station_information')
                 field: station_id
+  
+  - name: fct_station_snapshot
+    description: "This fact table contains the variation in the number of bikes available at each station"
+    columns:
+      - name: station_snapshot_id
+        description: "The unique identifier for the station at a specific point in time."
+        tests:
+          - not_null
+          - unique
+      - name: station_scd_id
+        description: "The surrogate key for the station."
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_station')
+                field: dbt_scd_id
+      - name: temps_id
+        description: "The surrogate key for the time dimension."
+        tests:
+          - not_null    
+          - relationships:
+              arguments:
+                to: ref('dim_temps')
+                field: datetime
+
+  - name: dim_station
+    description: "This dimension table contains information about the stations."
+    columns:
+      - name: dbt_scd_id
+        description: "The surrogate key for the station."
+        tests:
+          - not_null
+          - unique
+      - name: station_id
+        description: "The unique identifier for the station."
+        tests:
+          - not_null
+  - name: dim_temps
+    description: "This dimension table contains information about the time."
+    columns:
+      - name: datetime
+        description: "The timestamp for the record."
+        tests:
+          - not_null
+          - unique

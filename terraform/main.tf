@@ -21,6 +21,13 @@ resource "google_bigquery_dataset" "velib_analytics" {
   description = "Modeles dbt (staging/intermediate/marts)"
 }
 
+resource "google_bigquery_dataset" "velib_analytics_snapshots" {
+  dataset_id  = "velib_analytics_snapshots"
+  project     = var.project_id
+  location    = var.region
+  description = "Snapshots dbt (historisation SCD2, ex. station_information)"
+}
+
 resource "google_service_account" "airflow_velib" {
   account_id   = "airflow-velib"
   display_name = "Airflow Velib pipeline"
@@ -47,6 +54,12 @@ resource "google_bigquery_dataset_iam_member" "meteo_raw_editor" {
 
 resource "google_bigquery_dataset_iam_member" "velib_analytics_editor" {
   dataset_id = google_bigquery_dataset.velib_analytics.dataset_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.airflow_velib.email}"
+}
+
+resource "google_bigquery_dataset_iam_member" "velib_analytics_snapshots_editor" {
+  dataset_id = google_bigquery_dataset.velib_analytics_snapshots.dataset_id
   role       = "roles/bigquery.dataEditor"
   member     = "serviceAccount:${google_service_account.airflow_velib.email}"
 }

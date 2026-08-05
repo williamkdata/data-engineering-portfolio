@@ -27,7 +27,7 @@ default_args = {
 
 with DAG(
     dag_id="velib_pipeline",
-    description="Ingestion Velib' + meteo -> dbt run -> dbt test",
+    description="Ingestion Velib' + meteo -> dbt snapshot -> dbt run -> dbt test",
     schedule="0 * * * *",
     start_date=datetime(2026, 8, 1),
     catchup=False,
@@ -52,6 +52,12 @@ with DAG(
         append_env=True,
     )
 
+    dbt_snapshot = BashOperator(
+        task_id="dbt_snapshot",
+        bash_command="dbt snapshot --project-dir dbt --target prod",
+        cwd="/opt/airflow",
+    )
+
     dbt_run = BashOperator(
         task_id="dbt_run",
         bash_command="dbt run --project-dir dbt --target prod",
@@ -64,4 +70,4 @@ with DAG(
         cwd="/opt/airflow",
     )
 
-    [ingest_velib, ingest_meteo] >> dbt_run >> dbt_test
+    [ingest_velib, ingest_meteo] >> dbt_snapshot >> dbt_run >> dbt_test
