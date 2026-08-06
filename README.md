@@ -282,3 +282,17 @@ Les marts existants (`mart_correlation_meteo_usage`, `mart_disponibilite_station
 **Tests** : génériques (`not_null`/`unique` sur le grain de `fct_station_snapshot`, `unique` sur la clé de substitution de `dim_station`, `relationships` vers les deux dimensions) et un test singulier propre à la SCD2 (`assert_one_current_row_per_station`, `severity='error'` — une violation signifierait un vrai bug du mécanisme d'historisation, pas un phénomène métier à documenter).
 
 Intégré au DAG Airflow (`dbt_snapshot` entre l'ingestion et `dbt_run` — la dimension doit être historisée avant que les modèles qui la consomment ne se reconstruisent), et à Terraform (le dataset créé par le premier run du snapshot est déclaré et importé, avec les droits IAM du compte de service étendus).
+
+## Dashboard Looker Studio — Vélib' × météo
+
+Volet complémentaire aux marts et à la modélisation dimensionnelle : un dashboard partageable (Looker Studio, connecteur BigQuery natif, aucune infra à maintenir) pour rendre le mart météo/usage lisible sans ouvrir le repo.
+
+**Question posée avant de construire un seul graphique** : la météo anticipée influence-t-elle la disponibilité des Vélib' ? Corrélations réelles mesurées sur `mart_correlation_meteo_usage` (`CORR()` BigQuery) : précipitations 0.009, température -0.006 — aucune corrélation mesurable sur l'historique disponible. Le dashboard assume ce résultat plutôt que de le maquiller : le titre du graphique principal l'énonce directement, et un encart texte détaille les limites de l'échantillon (9 jours d'historique, 30 relevés, 5 créneaux horaires 13h-17h, données de prévision et non de mesure observée).
+
+**Modèle d'agrégats dédié** (`agg_dashboard_meteo_usage`) plutôt qu'une requête directe sur le mart détaillé : grain = un run d'ingestion (30 lignes contre 45 540 dans le mart détaillé), pour réduire les octets scannés à chaque rafraîchissement du dashboard — même logique de coût que le partitionnement en Phase 2. Fuseau horaire corrigé explicitement (`Europe/Paris`, conditionné par `target.name` comme le reste du projet) : une extraction naïve de l'heure sur `ingested_at` (UTC) décalait chaque relevé de 2h en plein été (CEST).
+
+**Contenu** : série temporelle (disponibilité vs température), 3 indicateurs de volumétrie (relevés collectés, stations suivies, profondeur d'historique), répartition par heure de la journée, encart texte sur les limites.
+
+![Dashboard Vélib' x météo](docs/dashboard_meteo_velib.png)
+
+Lien de partage (lecture seule) : https://lookerstudio.google.com/reporting/79a6ab69-f455-4728-9679-07d067c5a3be

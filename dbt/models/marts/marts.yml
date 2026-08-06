@@ -66,3 +66,12 @@ models:
         tests:
           - not_null
           - unique
+
+  - name: agg_dashboard_meteo_usage
+    description: "Aggregats (un run d'ingestion = une ligne) pour le dashboard Looker Studio, evite d'attaquer le mart detaille a chaque refresh."
+    columns:
+      - name: ingested_at
+        description: "Le run d'ingestion agrege (grain de cette table)."
+        tests:
+          - not_null
+          - unique
